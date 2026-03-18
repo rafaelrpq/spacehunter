@@ -15,7 +15,8 @@ const ROOMS = {
       { x: 600, y: 100, width: 30, height: 30, color: '#ffaa00', health: 3, maxHealth: 3, vx: 1, vy: 1 },
     ],
     exits: {
-      right: 'dungeon_entry'
+      right: 'dungeon_entry',
+      bottom: 'volcano_biome'
     },
     powerups: []
   },
@@ -43,13 +44,13 @@ const ROOMS = {
     obstacles: [
       { x: 0, y: 0, width: 800, height: 40, color: '#330033' },
       { x: 0, y: 560, width: 800, height: 40, color: '#330033' },
-      { x: 0, y: 0, width: 40, height: 600, color: '#330033' },
+      { x: 0, y: 0, width: 20, height: 600, color: '#330033' }, // Reduzi de 40 para 20 para evitar prender o player
       { x: 760, y: 0, width: 40, height: 600, color: '#330033' },
     ],
     enemies: [
       { 
         x: 400, y: 150, width: 80, height: 80, color: '#8800ff', 
-        health: 30, maxHealth: 30, vx: 2, vy: 2, isBoss: true, name: 'VOID SENTINEL',
+        health: 40, maxHealth: 40, vx: 2, vy: 2, isBoss: true, name: 'VOID SENTINEL',
         shootTimer: 0
       },
     ],
@@ -57,6 +58,23 @@ const ROOMS = {
       left: 'dungeon_entry'
     },
     powerups: []
+  },
+  volcano_biome: {
+    color: '#300',
+    obstacles: [
+      { x: 100, y: 100, width: 600, height: 400, color: '#ff4400', isLava: true }, // Lava Hazard
+      { x: 350, y: 250, width: 100, height: 100, color: '#633' }, // Safe platform
+    ],
+    enemies: [
+      { x: 100, y: 100, width: 40, health: 4, maxHealth: 4, color: '#f80', vx: 3, vy: 0 },
+      { x: 600, y: 400, width: 40, health: 4, maxHealth: 4, color: '#f80', vx: -3, vy: 0 },
+    ],
+    exits: {
+      top: 'overworld'
+    },
+    powerups: [
+      { x: 400, y: 300, type: 'missiles', color: '#f00', collected: false }
+    ]
   }
 };
 
@@ -83,6 +101,8 @@ const Game: React.FC = () => {
     maxJumps: 1,
     health: 5,
     maxHealth: 5,
+    missiles: 0,
+    hasMissiles: false,
     invulnerable: 0,
     direction: { x: 0, y: 1 },
   });
@@ -112,7 +132,10 @@ const Game: React.FC = () => {
         }
       }
       if (e.code === 'KeyZ' || e.code === 'Enter') {
-        shoot();
+        shoot(false);
+      }
+      if (e.code === 'KeyX' && playerRef.current.hasMissiles && playerRef.current.missiles > 0) {
+        shoot(true);
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => { keysRef.current[e.code] = false; };
@@ -124,8 +147,10 @@ const Game: React.FC = () => {
     };
   }, []);
 
-  const shoot = () => {
+  const shoot = (isMissile: boolean) => {
     const player = playerRef.current;
+    if (isMissile) player.missiles--;
+
     let dx = 0, dy = 0;
     if (keysRef.current['ArrowUp'] || keysRef.current['KeyW']) dy -= 1;
     if (keysRef.current['ArrowDown'] || keysRef.current['KeyS']) dy += 1;
@@ -134,19 +159,26 @@ const Game: React.FC = () => {
     if (dx === 0 && dy === 0) { dx = player.direction.x; dy = player.direction.y; }
     const mag = Math.sqrt(dx * dx + dy * dy);
     if (mag > 0) { dx /= mag; dy /= mag; }
+    
     projectilesRef.current.push({
       x: player.x, y: player.y - player.z,
-      vx: dx * 7, vy: dy * 7,
-      radius: 4, color: '#ff0055', life: 100, isEnemy: false
+      vx: dx * (isMissile ? 10 : 7), 
+      vy: dy * (isMissile ? 10 : 7),
+      radius: isMissile ? 8 : 4, 
+      color: isMissile ? '#f00' : '#ff0055', 
+      life: 100, 
+      isEnemy: false,
+      isMissile: isMissile
     });
   };
 
-  const checkCollision = (x: number, y: number, w: number, h: number) => {
+  const checkCollision = (x: number, y: number, w: number, h: number, ignoreLava: boolean = false) => {
     for (const obs of obstaclesRef.current) {
+      if (obs.isLava && ignoreLava) continue;
       if (x + w/2 > obs.x && x - w/2 < obs.x + obs.width &&
-          y + h/2 > obs.y && y - h/2 < obs.y + obs.height) return true;
+          y + h/2 > obs.y && y - h/2 < obs.y + obs.height) return obs;
     }
-    return false;
+    return null;
   };
 
   const update = () => {
@@ -167,9 +199,21 @@ const Game: React.FC = () => {
       const mag = Math.sqrt(dx * dx + dy * dy);
       const moveX = (dx / mag) * player.speed;
       const moveY = (dy / mag) * player.speed;
-      if (!checkCollision(player.x + moveX, player.y, player.width, player.height)) player.x += moveX;
-      if (!checkCollision(player.x, player.y + moveY, player.width, player.height)) player.y += moveY;
+      
+      const collX = checkCollision(player.x + moveX, player.y, player.width, player.height, true);
+      if (!collX) player.x += moveX;
+      
+      const collY = checkCollision(player.x, player.y + moveY, player.width, player.height, true);
+      if (!collY) player.y += moveY;
+      
       player.direction = { x: dx / mag, y: dy / mag };
+    }
+
+    // Lava Hazard
+    const lavaCollision = checkCollision(player.x, player.y, player.width, player.height);
+    if (lavaCollision?.isLava && player.z < 5 && player.invulnerable <= 0) {
+      player.health--;
+      player.invulnerable = 60;
     }
 
     // Jump
@@ -180,34 +224,40 @@ const Game: React.FC = () => {
     }
 
     // Transitions
-    if (player.x > CANVAS_WIDTH && (room.exits as any).right) { setCurrentRoomKey((room.exits as any).right); player.x = 20; }
-    else if (player.x < 0 && (room.exits as any).left) { setCurrentRoomKey((room.exits as any).left); player.x = CANVAS_WIDTH - 20; }
+    if (player.x > CANVAS_WIDTH && (room.exits as any).right) { setCurrentRoomKey((room.exits as any).right); player.x = 40; } // Spawn a bit more inside
+    else if (player.x < 0 && (room.exits as any).left) { setCurrentRoomKey((room.exits as any).left); player.x = CANVAS_WIDTH - 40; }
+    else if (player.y > CANVAS_HEIGHT && (room.exits as any).bottom) { setCurrentRoomKey((room.exits as any).bottom); player.y = 40; player.x = CANVAS_WIDTH/2; }
+    else if (player.y < 0 && (room.exits as any).top) { setCurrentRoomKey((room.exits as any).top); player.y = CANVAS_HEIGHT - 40; player.x = CANVAS_WIDTH/2; }
     else { player.x = Math.max(0, Math.min(CANVAS_WIDTH, player.x)); player.y = Math.max(0, Math.min(CANVAS_HEIGHT, player.y)); }
+
+    // Death check
+    if (player.health <= 0) { player.health = player.maxHealth; player.x = CANVAS_WIDTH/2; player.y = CANVAS_HEIGHT/2; setCurrentRoomKey('overworld'); }
 
     // Enemies
     enemiesRef.current.forEach(enemy => {
       if (enemy.isBoss) {
         enemy.shootTimer++;
         const angle = Math.atan2(player.y - enemy.y, player.x - enemy.x);
-        enemy.vx = Math.cos(angle) * (enemy.health < 15 ? 3 : 1.5);
-        enemy.vy = Math.sin(angle) * (enemy.health < 15 ? 3 : 1.5);
-        if (enemy.shootTimer > (enemy.health < 15 ? 30 : 60)) {
+        enemy.vx = Math.cos(angle) * (enemy.health < 20 ? 3 : 1.5);
+        enemy.vy = Math.sin(angle) * (enemy.health < 20 ? 3 : 1.5);
+        if (enemy.shootTimer > (enemy.health < 20 ? 30 : 60)) {
           enemy.shootTimer = 0;
-          if (enemy.health < 15) {
-            for (let i = 0; i < 8; i++) {
-              const a = (Math.PI * 2 / 8) * i;
-              projectilesRef.current.push({ x: enemy.x + enemy.width/2, y: enemy.y + enemy.height/2, vx: Math.cos(a)*5, vy: Math.sin(a)*5, radius: 6, color: '#ff00ff', life: 120, isEnemy: true });
+          if (enemy.health < 20) {
+            for (let i = 0; i < 12; i++) {
+              const a = (Math.PI * 2 / 12) * i;
+              projectilesRef.current.push({ x: enemy.x + enemy.width/2, y: enemy.y + enemy.height/2, vx: Math.cos(a)*5, vy: Math.sin(a)*5, radius: 6, color: '#f0f', life: 120, isEnemy: true });
             }
           } else {
             for (let i = -1; i <= 1; i++) {
-              const a = angle + (i * 0.2);
-              projectilesRef.current.push({ x: enemy.x + enemy.width/2, y: enemy.y + enemy.height/2, vx: Math.cos(a)*4, vy: Math.sin(a)*4, radius: 6, color: '#ff00ff', life: 120, isEnemy: true });
+              const a = angle + (i * 0.3);
+              projectilesRef.current.push({ x: enemy.x + enemy.width/2, y: enemy.y + enemy.height/2, vx: Math.cos(a)*4, vy: Math.sin(a)*4, radius: 6, color: '#f0f', life: 120, isEnemy: true });
             }
           }
         }
       }
-      if (checkCollision(enemy.x + enemy.vx, enemy.y, enemy.width, enemy.height) || enemy.x + enemy.vx < 0 || enemy.x + enemy.vx > CANVAS_WIDTH - enemy.width) enemy.vx *= -1;
-      if (checkCollision(enemy.x, enemy.y + enemy.vy, enemy.width, enemy.height) || enemy.y + enemy.vy < 0 || enemy.y + enemy.vy > CANVAS_HEIGHT - enemy.height) enemy.vy *= -1;
+      const eColl = checkCollision(enemy.x + enemy.vx, enemy.y + enemy.vy, enemy.width, enemy.height, true);
+      if (eColl || enemy.x + enemy.vx < 0 || enemy.x + enemy.vx > CANVAS_WIDTH - enemy.width) enemy.vx *= -1;
+      if (eColl || enemy.y + enemy.vy < 0 || enemy.y + enemy.vy > CANVAS_HEIGHT - enemy.height) enemy.vy *= -1;
       enemy.x += enemy.vx; enemy.y += enemy.vy;
     });
 
@@ -218,21 +268,20 @@ const Game: React.FC = () => {
         const dist = Math.sqrt((p.x - player.x)**2 + (p.y - player.y)**2);
         if (dist < 20 && player.z < 10 && player.invulnerable <= 0) {
            player.health--; player.invulnerable = 60;
-           if (player.health <= 0) { player.health = player.maxHealth; player.x = CANVAS_WIDTH/2; player.y = CANVAS_HEIGHT/2; setCurrentRoomKey('overworld'); }
            return false;
         }
       } else {
         for (const enemy of enemiesRef.current) {
           if (p.x > enemy.x && p.x < enemy.x + enemy.width && p.y > enemy.y && p.y < enemy.y + enemy.height) {
-            enemy.health--;
+            enemy.health -= p.isMissile ? 5 : 1;
             if (enemy.health <= 0 && enemy.isBoss) {
-               powerupsRef.current.push({ x: enemy.x + enemy.width/2, y: enemy.y + enemy.height/2, type: 'double_jump', color: '#00ffff', collected: false });
+               powerupsRef.current.push({ x: enemy.x + enemy.width/2, y: enemy.y + enemy.height/2, type: 'double_jump', color: '#0ff', collected: false });
             }
             return false;
           }
         }
       }
-      if (checkCollision(p.x, p.y, p.radius, p.radius)) return false;
+      if (checkCollision(p.x, p.y, p.radius, p.radius, true)) return false;
       return p.life > 0 && p.x > 0 && p.x < CANVAS_WIDTH && p.y > 0 && p.y < CANVAS_HEIGHT;
     });
 
@@ -240,7 +289,12 @@ const Game: React.FC = () => {
     powerupsRef.current.forEach(p => {
       if (!p.collected) {
         const dist = Math.sqrt((player.x - p.x)**2 + (player.y - p.y)**2);
-        if (dist < 30) { p.collected = true; if (p.type === 'speed') player.speed = 7; if (p.type === 'double_jump') player.maxJumps = 2; }
+        if (dist < 30) { 
+          p.collected = true; 
+          if (p.type === 'speed') player.speed = 7; 
+          if (p.type === 'double_jump') player.maxJumps = 2; 
+          if (p.type === 'missiles') { player.hasMissiles = true; player.missiles += 10; }
+        }
       }
     });
   };
@@ -266,12 +320,14 @@ const Game: React.FC = () => {
     
     projectilesRef.current.forEach(p => { ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.radius, 0, Math.PI*2); ctx.fill(); });
     
+    // UI
     ctx.fillStyle = '#fff'; ctx.font = '16px monospace';
-    ctx.fillText(`Vida: ${player.health}/${player.maxHealth}`, 20, 30);
-    ctx.fillText(`Inimigos: ${enemiesRef.current.length}`, 20, 55);
+    ctx.fillText(`Corações: ${"❤️".repeat(player.health)}`, 20, 30);
+    ctx.fillText(`Mísseis (X): ${player.hasMissiles ? player.missiles : '??'}`, 20, 55);
     let uiY = 80;
     if (player.speed > 4) { ctx.fillText('POWER-UP: VELOCIDADE!', 20, uiY); uiY += 25; }
     if (player.maxJumps > 1) { ctx.fillText('POWER-UP: PULO DUPLO!', 20, uiY); uiY += 25; }
+    ctx.fillText('Z: Atirar | X: Míssil | Espaço: Pulo', 20, CANVAS_HEIGHT - 20);
 
     enemiesRef.current.forEach(enemy => {
       if (enemy.isBoss) {
