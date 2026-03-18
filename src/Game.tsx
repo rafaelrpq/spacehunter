@@ -31,11 +31,32 @@ const ROOMS = {
       { x: 600, y: 500, width: 30, height: 30, color: '#ff00ff', health: 5, maxHealth: 5, vx: -2, vy: -2 },
     ],
     exits: {
-      left: 'overworld'
+      left: 'overworld',
+      right: 'dungeon_boss'
     },
     powerups: [
       { x: 400, y: 100, type: 'speed', color: '#ffff00', collected: false }
     ]
+  },
+  dungeon_boss: {
+    color: '#000',
+    obstacles: [
+      { x: 0, y: 0, width: 800, height: 40, color: '#330033' },
+      { x: 0, y: 560, width: 800, height: 40, color: '#330033' },
+      { x: 0, y: 0, width: 40, height: 600, color: '#330033' },
+      { x: 760, y: 0, width: 40, height: 600, color: '#330033' },
+    ],
+    enemies: [
+      { 
+        x: 400, y: 150, width: 80, height: 80, color: '#8800ff', 
+        health: 30, maxHealth: 30, vx: 2, vy: 2, isBoss: true, name: 'VOID SENTINEL',
+        shootTimer: 0
+      },
+    ],
+    exits: {
+      left: 'dungeon_entry'
+    },
+    powerups: []
   }
 };
 
@@ -51,14 +72,19 @@ const Game: React.FC = () => {
   const playerRef = useRef({
     x: CANVAS_WIDTH / 2,
     y: CANVAS_HEIGHT / 2,
-    z: 0, // For jumping
-    vz: 0, // Vertical velocity for jump
+    z: 0, 
+    vz: 0,
     width: 32,
     height: 32,
     speed: 4,
     color: '#00ffcc',
     isJumping: false,
-    direction: { x: 0, y: 1 }, // Last movement direction
+    jumpCount: 0,
+    maxJumps: 1,
+    health: 5,
+    maxHealth: 5,
+    invulnerable: 0,
+    direction: { x: 0, y: 1 },
   });
 
   const [currentRoomKey, setCurrentRoomKey] = React.useState<keyof typeof ROOMS>('overworld');
@@ -68,10 +94,8 @@ const Game: React.FC = () => {
   const powerupsRef = useRef<any[]>([]);
 
   useEffect(() => {
-    // Load room data when room changes
     const room = ROOMS[currentRoomKey];
     obstaclesRef.current = [...room.obstacles];
-    // Create new enemies instead of sharing references
     enemiesRef.current = room.enemies.map(e => ({ ...e }));
     powerupsRef.current = (room as any).powerups.map((p: any) => ({ ...p }));
     projectilesRef.current = [];
@@ -80,22 +104,20 @@ const Game: React.FC = () => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       keysRef.current[e.code] = true;
-      if (e.code === 'Space' && !playerRef.current.isJumping) {
-        playerRef.current.vz = 8;
-        playerRef.current.isJumping = true;
+      if (e.code === 'Space') {
+        if (playerRef.current.jumpCount < playerRef.current.maxJumps) {
+          playerRef.current.vz = 8;
+          playerRef.current.isJumping = true;
+          playerRef.current.jumpCount++;
+        }
       }
       if (e.code === 'KeyZ' || e.code === 'Enter') {
         shoot();
       }
     };
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      keysRef.current[e.code] = false;
-    };
-
+    const handleKeyUp = (e: KeyboardEvent) => { keysRef.current[e.code] = false; };
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
-
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
@@ -104,47 +126,25 @@ const Game: React.FC = () => {
 
   const shoot = () => {
     const player = playerRef.current;
-    
-    let dx = 0;
-    let dy = 0;
-
+    let dx = 0, dy = 0;
     if (keysRef.current['ArrowUp'] || keysRef.current['KeyW']) dy -= 1;
     if (keysRef.current['ArrowDown'] || keysRef.current['KeyS']) dy += 1;
     if (keysRef.current['ArrowLeft'] || keysRef.current['KeyA']) dx -= 1;
     if (keysRef.current['ArrowRight'] || keysRef.current['KeyD']) dx += 1;
-
-    if (dx === 0 && dy === 0) {
-      dx = player.direction.x;
-      dy = player.direction.y;
-    }
-
+    if (dx === 0 && dy === 0) { dx = player.direction.x; dy = player.direction.y; }
     const mag = Math.sqrt(dx * dx + dy * dy);
-    if (mag > 0) {
-      dx /= mag;
-      dy /= mag;
-    }
-
+    if (mag > 0) { dx /= mag; dy /= mag; }
     projectilesRef.current.push({
-      x: player.x,
-      y: player.y - player.z,
-      vx: dx * 7,
-      vy: dy * 7,
-      radius: 4,
-      color: '#ff0055',
-      life: 100,
+      x: player.x, y: player.y - player.z,
+      vx: dx * 7, vy: dy * 7,
+      radius: 4, color: '#ff0055', life: 100, isEnemy: false
     });
   };
 
   const checkCollision = (x: number, y: number, w: number, h: number) => {
     for (const obs of obstaclesRef.current) {
-      if (
-        x + w/2 > obs.x &&
-        x - w/2 < obs.x + obs.width &&
-        y + h/2 > obs.y &&
-        y - h/2 < obs.y + obs.height
-      ) {
-        return true;
-      }
+      if (x + w/2 > obs.x && x - w/2 < obs.x + obs.width &&
+          y + h/2 > obs.y && y - h/2 < obs.y + obs.height) return true;
     }
     return false;
   };
@@ -154,10 +154,10 @@ const Game: React.FC = () => {
     const keys = keysRef.current;
     const room = ROOMS[currentRoomKey];
 
-    // Movement
-    let dx = 0;
-    let dy = 0;
+    if (player.invulnerable > 0) player.invulnerable--;
 
+    // Movement
+    let dx = 0, dy = 0;
     if (keys['ArrowUp'] || keys['KeyW']) dy -= 1;
     if (keys['ArrowDown'] || keys['KeyS']) dy += 1;
     if (keys['ArrowLeft'] || keys['KeyA']) dx -= 1;
@@ -167,13 +167,8 @@ const Game: React.FC = () => {
       const mag = Math.sqrt(dx * dx + dy * dy);
       const moveX = (dx / mag) * player.speed;
       const moveY = (dy / mag) * player.speed;
-      
-      if (!checkCollision(player.x + moveX, player.y, player.width, player.height)) {
-        player.x += moveX;
-      }
-      if (!checkCollision(player.x, player.y + moveY, player.width, player.height)) {
-        player.y += moveY;
-      }
+      if (!checkCollision(player.x + moveX, player.y, player.width, player.height)) player.x += moveX;
+      if (!checkCollision(player.x, player.y + moveY, player.width, player.height)) player.y += moveY;
       player.direction = { x: dx / mag, y: dy / mag };
     }
 
@@ -181,153 +176,122 @@ const Game: React.FC = () => {
     if (player.isJumping) {
       player.z += player.vz;
       player.vz -= 0.5;
-      if (player.z <= 0) {
-        player.z = 0;
-        player.vz = 0;
-        player.isJumping = false;
-      }
+      if (player.z <= 0) { player.z = 0; player.vz = 0; player.isJumping = false; player.jumpCount = 0; }
     }
 
-    // Room Transitions
-    if (player.x > CANVAS_WIDTH && (room.exits as any).right) {
-      setCurrentRoomKey((room.exits as any).right);
-      player.x = 20;
-    } else if (player.x < 0 && (room.exits as any).left) {
-      setCurrentRoomKey((room.exits as any).left);
-      player.x = CANVAS_WIDTH - 20;
-    } else {
-      player.x = Math.max(0, Math.min(CANVAS_WIDTH, player.x));
-      player.y = Math.max(0, Math.min(CANVAS_HEIGHT, player.y));
-    }
+    // Transitions
+    if (player.x > CANVAS_WIDTH && (room.exits as any).right) { setCurrentRoomKey((room.exits as any).right); player.x = 20; }
+    else if (player.x < 0 && (room.exits as any).left) { setCurrentRoomKey((room.exits as any).left); player.x = CANVAS_WIDTH - 20; }
+    else { player.x = Math.max(0, Math.min(CANVAS_WIDTH, player.x)); player.y = Math.max(0, Math.min(CANVAS_HEIGHT, player.y)); }
 
     // Enemies
     enemiesRef.current.forEach(enemy => {
-      if (checkCollision(enemy.x + enemy.vx, enemy.y, enemy.width, enemy.height) || 
-          enemy.x + enemy.vx < 0 || enemy.x + enemy.vx > CANVAS_WIDTH - enemy.width) {
-        enemy.vx *= -1;
+      if (enemy.isBoss) {
+        enemy.shootTimer++;
+        const angle = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+        enemy.vx = Math.cos(angle) * (enemy.health < 15 ? 3 : 1.5);
+        enemy.vy = Math.sin(angle) * (enemy.health < 15 ? 3 : 1.5);
+        if (enemy.shootTimer > (enemy.health < 15 ? 30 : 60)) {
+          enemy.shootTimer = 0;
+          if (enemy.health < 15) {
+            for (let i = 0; i < 8; i++) {
+              const a = (Math.PI * 2 / 8) * i;
+              projectilesRef.current.push({ x: enemy.x + enemy.width/2, y: enemy.y + enemy.height/2, vx: Math.cos(a)*5, vy: Math.sin(a)*5, radius: 6, color: '#ff00ff', life: 120, isEnemy: true });
+            }
+          } else {
+            for (let i = -1; i <= 1; i++) {
+              const a = angle + (i * 0.2);
+              projectilesRef.current.push({ x: enemy.x + enemy.width/2, y: enemy.y + enemy.height/2, vx: Math.cos(a)*4, vy: Math.sin(a)*4, radius: 6, color: '#ff00ff', life: 120, isEnemy: true });
+            }
+          }
+        }
       }
-      if (checkCollision(enemy.x, enemy.y + enemy.vy, enemy.width, enemy.height) || 
-          enemy.y + enemy.vy < 0 || enemy.y + enemy.vy > CANVAS_HEIGHT - enemy.height) {
-        enemy.vy *= -1;
-      }
-      enemy.x += enemy.vx;
-      enemy.y += enemy.vy;
+      if (checkCollision(enemy.x + enemy.vx, enemy.y, enemy.width, enemy.height) || enemy.x + enemy.vx < 0 || enemy.x + enemy.vx > CANVAS_WIDTH - enemy.width) enemy.vx *= -1;
+      if (checkCollision(enemy.x, enemy.y + enemy.vy, enemy.width, enemy.height) || enemy.y + enemy.vy < 0 || enemy.y + enemy.vy > CANVAS_HEIGHT - enemy.height) enemy.vy *= -1;
+      enemy.x += enemy.vx; enemy.y += enemy.vy;
     });
 
     // Projectiles
     projectilesRef.current = projectilesRef.current.filter(p => {
-      p.x += p.vx;
-      p.y += p.vy;
-      p.life--;
-
-      for (const enemy of enemiesRef.current) {
-        if (p.x > enemy.x && p.x < enemy.x + enemy.width &&
-            p.y > enemy.y && p.y < enemy.y + enemy.height) {
-          enemy.health--;
-          return false;
+      p.x += p.vx; p.y += p.vy; p.life--;
+      if (p.isEnemy) {
+        const dist = Math.sqrt((p.x - player.x)**2 + (p.y - player.y)**2);
+        if (dist < 20 && player.z < 10 && player.invulnerable <= 0) {
+           player.health--; player.invulnerable = 60;
+           if (player.health <= 0) { player.health = player.maxHealth; player.x = CANVAS_WIDTH/2; player.y = CANVAS_HEIGHT/2; setCurrentRoomKey('overworld'); }
+           return false;
+        }
+      } else {
+        for (const enemy of enemiesRef.current) {
+          if (p.x > enemy.x && p.x < enemy.x + enemy.width && p.y > enemy.y && p.y < enemy.y + enemy.height) {
+            enemy.health--;
+            if (enemy.health <= 0 && enemy.isBoss) {
+               powerupsRef.current.push({ x: enemy.x + enemy.width/2, y: enemy.y + enemy.height/2, type: 'double_jump', color: '#00ffff', collected: false });
+            }
+            return false;
+          }
         }
       }
-
       if (checkCollision(p.x, p.y, p.radius, p.radius)) return false;
-
       return p.life > 0 && p.x > 0 && p.x < CANVAS_WIDTH && p.y > 0 && p.y < CANVAS_HEIGHT;
     });
 
     enemiesRef.current = enemiesRef.current.filter(e => e.health > 0);
-
-    // Powerups
     powerupsRef.current.forEach(p => {
       if (!p.collected) {
         const dist = Math.sqrt((player.x - p.x)**2 + (player.y - p.y)**2);
-        if (dist < 30) {
-          p.collected = true;
-          if (p.type === 'speed') player.speed = 7;
-        }
+        if (dist < 30) { p.collected = true; if (p.type === 'speed') player.speed = 7; if (p.type === 'double_jump') player.maxJumps = 2; }
       }
     });
   };
 
   const draw = (ctx: CanvasRenderingContext2D) => {
     const room = ROOMS[currentRoomKey];
-    ctx.fillStyle = room.color;
-    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 1;
-    const gridSize = 50;
-    for (let x = 0; x < CANVAS_WIDTH; x += gridSize) {
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, CANVAS_HEIGHT); ctx.stroke();
-    }
-    for (let y = 0; y < CANVAS_HEIGHT; y += gridSize) {
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(CANVAS_WIDTH, y); ctx.stroke();
-    }
-
     const player = playerRef.current;
+    ctx.fillStyle = room.color; ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
+    for (let x = 0; x < CANVAS_WIDTH; x += 50) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, CANVAS_HEIGHT); ctx.stroke(); }
+    for (let y = 0; y < CANVAS_HEIGHT; y += 50) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(CANVAS_WIDTH, y); ctx.stroke(); }
 
-    obstaclesRef.current.forEach(obs => {
-      ctx.fillStyle = obs.color;
-      ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
-      ctx.strokeStyle = '#222';
-      ctx.strokeRect(obs.x, obs.y, obs.width, obs.height);
+    obstaclesRef.current.forEach(obs => { ctx.fillStyle = obs.color; ctx.fillRect(obs.x, obs.y, obs.width, obs.height); });
+    enemiesRef.current.forEach(enemy => {
+      ctx.fillStyle = enemy.color; ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+      ctx.fillStyle = '#f00'; ctx.fillRect(enemy.x, enemy.y - 10, enemy.width, 4);
+      ctx.fillStyle = '#0f0'; ctx.fillRect(enemy.x, enemy.y - 10, (enemy.health / (enemy.maxHealth || 3)) * enemy.width, 4);
     });
+    powerupsRef.current.forEach(p => { if (!p.collected) { ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, 10, 0, Math.PI * 2); ctx.fill(); } });
+    
+    ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.beginPath(); ctx.ellipse(player.x, player.y, 16, 8, 0, 0, Math.PI*2); ctx.fill();
+    if (player.invulnerable % 10 < 5) { ctx.fillStyle = player.color; ctx.fillRect(player.x - 16, player.y - 16 - player.z, 32, 32); }
+    
+    projectilesRef.current.forEach(p => { ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.radius, 0, Math.PI*2); ctx.fill(); });
+    
+    ctx.fillStyle = '#fff'; ctx.font = '16px monospace';
+    ctx.fillText(`Vida: ${player.health}/${player.maxHealth}`, 20, 30);
+    ctx.fillText(`Inimigos: ${enemiesRef.current.length}`, 20, 55);
+    let uiY = 80;
+    if (player.speed > 4) { ctx.fillText('POWER-UP: VELOCIDADE!', 20, uiY); uiY += 25; }
+    if (player.maxJumps > 1) { ctx.fillText('POWER-UP: PULO DUPLO!', 20, uiY); uiY += 25; }
 
     enemiesRef.current.forEach(enemy => {
-      ctx.fillStyle = enemy.color;
-      ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
-      ctx.fillStyle = '#ff0000';
-      ctx.fillRect(enemy.x, enemy.y - 10, enemy.width, 4);
-      ctx.fillStyle = '#00ff00';
-      ctx.fillRect(enemy.x, enemy.y - 10, (enemy.health / (enemy.maxHealth || 3)) * enemy.width, 4);
-    });
-
-    powerupsRef.current.forEach(p => {
-      if (!p.collected) {
-        ctx.fillStyle = p.color;
-        ctx.beginPath(); ctx.arc(p.x, p.y, 10, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = '#fff'; ctx.stroke();
+      if (enemy.isBoss) {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(CANVAS_WIDTH/2 - 200, CANVAS_HEIGHT - 60, 400, 30);
+        ctx.fillStyle = '#f00'; ctx.fillRect(CANVAS_WIDTH/2 - 195, CANVAS_HEIGHT - 55, (enemy.health / enemy.maxHealth) * 390, 20);
+        ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.fillText(enemy.name, CANVAS_WIDTH/2, CANVAS_HEIGHT - 70); ctx.textAlign = 'left';
       }
     });
-
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-    ctx.beginPath();
-    ctx.ellipse(player.x, player.y, player.width / 2, player.height / 4, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = player.color;
-    ctx.fillRect(player.x - player.width / 2, player.y - player.height / 2 - player.z, player.width, player.height);
-
-    projectilesRef.current.forEach(p => {
-      ctx.fillStyle = p.color;
-      ctx.beginPath(); ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2); ctx.fill();
-    });
-    
-    ctx.fillStyle = '#fff';
-    ctx.font = '16px monospace';
-    ctx.fillText('WASD: Mover | SPACE: Pular | Z/ENTER: Atirar', 20, 30);
-    ctx.fillText(`Inimigos: ${enemiesRef.current.length}`, 20, 55);
-    if (player.speed > 4) ctx.fillText('POWER-UP: VELOCIDADE!', 20, 80);
   };
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    const canvas = canvasRef.current; if (!canvas) return;
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
     let animationFrameId: number;
-    const render = () => {
-      update();
-      draw(ctx);
-      animationFrameId = requestAnimationFrame(render);
-    };
+    const render = () => { update(); draw(ctx); animationFrameId = requestAnimationFrame(render); };
     render();
     return () => cancelAnimationFrame(animationFrameId);
   }, [currentRoomKey]);
 
-  return (
-    <div className="game-container">
-      <canvas ref={canvasRef} width={CANVAS_WIDTH} height={CANVAS_HEIGHT} />
-    </div>
-  );
+  return (<div className="game-container"><canvas ref={canvasRef} width={CANVAS_WIDTH} height={CANVAS_HEIGHT} /></div>);
 };
 
 export default Game;
